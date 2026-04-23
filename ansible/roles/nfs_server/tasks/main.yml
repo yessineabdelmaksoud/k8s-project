@@ -1,0 +1,44 @@
+---
+- name: Install nfs-kernel-server
+  ansible.builtin.apt:
+    name: nfs-kernel-server
+    state: present
+    update_cache: true
+
+- name: Create NFS export directory
+  ansible.builtin.file:
+    path: /srv/nfs/k8s
+    state: directory
+    mode: "0777"
+    owner: nobody
+    group: nogroup
+
+- name: Configure NFS exports
+  ansible.builtin.lineinfile:
+    path: /etc/exports
+    line: "/srv/nfs/k8s 192.168.56.0/24(rw,sync,no_subtree_check,no_root_squash)"
+    create: true
+    mode: "0644"
+  notify: reload exports
+
+- name: Create Jenkins NFS export directory
+  ansible.builtin.file:
+    path: /srv/nfs/jenkins
+    state: directory
+    mode: "0777"
+    owner: nobody
+    group: nogroup
+
+- name: Configure Jenkins NFS export
+  ansible.builtin.lineinfile:
+    path: /etc/exports
+    line: "/srv/nfs/jenkins 192.168.56.0/24(rw,sync,no_subtree_check,no_root_squash)"
+    create: true
+    mode: "0644"
+  notify: reload exports
+
+- name: Enable and start nfs-kernel-server
+  ansible.builtin.systemd:
+    name: nfs-kernel-server
+    enabled: true
+    state: started

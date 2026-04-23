@@ -1,0 +1,35 @@
+# =============================================================================
+# Role: frontend — Deploy frontend application in frontend namespace
+# =============================================================================
+# Runs on: masters (become: false, as vagrant user with kubectl)
+# =============================================================================
+---
+
+# 1. Copy manifest files to master
+- name: Create frontend manifests directory
+  ansible.builtin.file:
+    path: /tmp/k8s-frontend
+    state: directory
+    mode: "0755"
+
+- name: Copy frontend manifest files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /tmp/k8s-frontend/
+  loop:
+    - namespace.yaml
+    - deployment.yaml
+    - service.yaml
+
+# 2. Apply manifests in order
+- name: Apply frontend namespace
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-frontend/namespace.yaml
+  changed_when: true
+
+- name: Apply frontend deployment
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-frontend/deployment.yaml
+  changed_when: true
+
+- name: Apply frontend service
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-frontend/service.yaml
+  changed_when: true

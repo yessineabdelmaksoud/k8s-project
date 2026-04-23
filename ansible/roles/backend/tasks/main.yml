@@ -1,0 +1,40 @@
+# =============================================================================
+# Role: backend — Deploy backend application in backend namespace
+# =============================================================================
+# Runs on: masters (become: false, as vagrant user with kubectl)
+# =============================================================================
+---
+
+# 1. Copy manifest files to master
+- name: Create backend manifests directory
+  ansible.builtin.file:
+    path: /tmp/k8s-backend
+    state: directory
+    mode: "0755"
+
+- name: Copy backend manifest files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /tmp/k8s-backend/
+  loop:
+    - namespace.yaml
+    - secret.yaml
+    - deployment.yaml
+    - service.yaml
+
+# 2. Apply manifests in order
+- name: Apply backend namespace
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-backend/namespace.yaml
+  changed_when: true
+
+- name: Apply backend secret
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-backend/secret.yaml
+  changed_when: true
+
+- name: Apply backend deployment
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-backend/deployment.yaml
+  changed_when: true
+
+- name: Apply backend service
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-backend/service.yaml
+  changed_when: true

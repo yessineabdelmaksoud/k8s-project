@@ -1,0 +1,24 @@
+# =============================================================================
+# Role: gitea — Deploy Gitea container on services VM
+# =============================================================================
+---
+
+# 1. Create Gitea data directory
+- name: Create Gitea data directory
+  ansible.builtin.file:
+    path: /srv/gitea
+    state: directory
+    mode: "0755"
+
+# 2. Start Gitea container
+- name: Start Gitea container
+  community.docker.docker_container:
+    name: gitea
+    image: gitea/gitea:latest
+    state: started
+    restart_policy: always
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    volumes:
+      - /srv/gitea:/data

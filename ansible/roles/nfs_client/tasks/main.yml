@@ -1,0 +1,6 @@
+---
+- name: Install nfs-common on Kubernetes nodes
+  ansible.builtin.apt:
+    name: nfs-common
+    state: present
+    update_cache: true

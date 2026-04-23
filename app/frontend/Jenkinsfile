@@ -1,0 +1,59 @@
+pipeline {
+    agent any
+
+    environment {
+        NEXUS_URL    = "192.168.56.20:8082"
+        GITEA_URL    = "http://192.168.56.20:3000"
+        IMAGE_NAME   = "frontend"
+        NAMESPACE    = "frontend"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: "${GITEA_URL}/vagrant/frontend.git"
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                sh "docker build -t ${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} ."
+            }
+        }
+
+        stage('Push to Nexus') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus-credentials',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+                    sh "echo ${NEXUS_PASS} | docker login ${NEXUS_URL} -u ${NEXUS_USER} --password-stdin"
+                    sh "docker push ${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER}"
+                    sh "docker tag ${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} ${NEXUS_URL}/${IMAGE_NAME}:latest"
+                    sh "docker push ${NEXUS_URL}/${IMAGE_NAME}:latest"
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh "kubectl set image deployment/${IMAGE_NAME} ${IMAGE_NAME}=${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} -n ${NAMESPACE}"
+            }
+        }
+
+        stage('Verify') {
+            steps {
+                sh "kubectl rollout status deployment/${IMAGE_NAME} -n ${NAMESPACE} --timeout=120s"
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} || true"
+            sh "docker rmi ${NEXUS_URL}/${IMAGE_NAME}:latest || true"
+        }
+    }
+}

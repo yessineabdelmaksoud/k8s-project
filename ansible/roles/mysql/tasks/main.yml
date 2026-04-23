@@ -1,0 +1,76 @@
+# =============================================================================
+# Role: mysql — Deploy MySQL StatefulSet in database namespace
+# =============================================================================
+# Runs on: masters (become: false, as vagrant user with kubectl)
+# =============================================================================
+---
+
+# 1. Clean up old MySQL resources from default namespace (migration)
+- name: Delete old MySQL deployment from default namespace
+  ansible.builtin.command: kubectl delete deployment mysql --namespace default --ignore-not-found=true
+  changed_when: false
+
+- name: Delete old MySQL service from default namespace
+  ansible.builtin.command: kubectl delete svc mysql-svc --namespace default --ignore-not-found=true
+  changed_when: false
+
+- name: Delete old MySQL PVC from default namespace
+  ansible.builtin.command: kubectl delete pvc pvc-mysql --namespace default --ignore-not-found=true
+  changed_when: false
+
+- name: Delete old MySQL secret from default namespace
+  ansible.builtin.command: kubectl delete secret mysql-secret --namespace default --ignore-not-found=true
+  changed_when: false
+
+- name: Delete old MySQL PV
+  ansible.builtin.command: kubectl delete pv pv-mysql --ignore-not-found=true
+  changed_when: false
+
+# 2. Copy manifest files to master
+- name: Create MySQL manifests directory
+  ansible.builtin.file:
+    path: /tmp/k8s-mysql
+    state: directory
+    mode: "0755"
+
+- name: Copy MySQL manifest files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /tmp/k8s-mysql/
+  loop:
+    - namespace.yaml
+    - pv.yaml
+    - pvc.yaml
+    - secret.yaml
+    - statefulset.yaml
+    - service.yaml
+
+# 3. Apply manifests in order
+- name: Apply database namespace
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-mysql/namespace.yaml
+  changed_when: true
+
+- name: Apply MySQL PersistentVolume
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-mysql/pv.yaml
+  changed_when: true
+
+- name: Apply MySQL PersistentVolumeClaim
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-mysql/pvc.yaml
+  changed_when: true
+
+- name: Apply MySQL Secret
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-mysql/secret.yaml
+  changed_when: true
+
+- name: Apply MySQL Service
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-mysql/service.yaml
+  changed_when: true
+
+- name: Apply MySQL StatefulSet
+  ansible.builtin.command: kubectl apply -f /tmp/k8s-mysql/statefulset.yaml
+  changed_when: true
+
+# 4. Wait for MySQL pod to be ready
+- name: Wait for MySQL StatefulSet to be ready
+  ansible.builtin.command: kubectl rollout status statefulset/mysql -n database --timeout=180s
+  changed_when: false

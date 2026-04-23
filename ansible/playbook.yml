@@ -1,0 +1,96 @@
+# =============================================================================
+# Ansible Playbook — Kubernetes Cluster Provisioning
+# =============================================================================
+# Execution order:
+#   1. common      → System prerequisites (all k8s nodes)
+#   2. containerd   → Container runtime (all k8s nodes)
+#   3. kubernetes   → kubeadm/kubelet/kubectl (all k8s nodes)
+#   4. master       → Control plane init (masters only)
+#   5. cni          → Flannel network plugin (masters only)
+#   6. workers      → Join workers to cluster (workers only)
+#   7. validation   → Verify cluster health (masters only)
+# =============================================================================
+---
+
+# =============================================================================
+# Play 1 — Prepare all Kubernetes nodes (common + containerd + kubernetes)
+# =============================================================================
+- name: Prepare Kubernetes nodes
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+    - role: nfs_client
+    - role: containerd
+    - role: kubernetes
+
+# =============================================================================
+# Play 2 — Initialize the control plane and install CNI
+# =============================================================================
+- name: Initialize Kubernetes control plane
+  hosts: masters
+  become: true
+  gather_facts: false
+  roles:
+    - role: master
+    - role: cni
+
+# =============================================================================
+# Play 3 — Join worker nodes to the cluster
+# =============================================================================
+- name: Join worker nodes to the cluster
+  hosts: workers
+  become: true
+  gather_facts: false
+  roles:
+    - role: workers
+
+# =============================================================================
+# Play 4 — Validate the cluster
+# =============================================================================
+- name: Validate Kubernetes cluster
+  hosts: masters
+  become: false
+  gather_facts: false
+  tasks:
+    # Wait for all nodes to become Ready
+    - name: Wait for all nodes to be Ready
+      ansible.builtin.shell: |
+        kubectl get nodes --no-headers | grep -v " Ready " | wc -l
+      register: not_ready_count
+      until: not_ready_count.stdout | trim | int == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    # Display node status
+    - name: Get node status
+      ansible.builtin.command: kubectl get nodes -o wide
+      register: nodes_output
+      changed_when: false
+
+    - name: Display node status
+      ansible.builtin.debug:
+        msg: "{{ nodes_output.stdout_lines }}"
+
+    # Display pod status
+    - name: Get pod status across all namespaces
+      ansible.builtin.command: kubectl get pods -A -o wide
+      register: pods_output
+      changed_when: false
+
+    - name: Display pod status
+      ansible.builtin.debug:
+        msg: "{{ pods_output.stdout_lines }}"
+
+# =============================================================================
+# Play 5 — Prepare services node (common packages only)
+# =============================================================================
+- name: Prepare services node
+  hosts: services
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+    - role: nfs_server

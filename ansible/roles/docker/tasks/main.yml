@@ -1,0 +1,84 @@
+# =============================================================================
+# Role: docker — Install Docker engine + configure insecure registry
+# =============================================================================
+# Applied to: services VM (for Gitea/Nexus containers) and workers (for Jenkins builds)
+# =============================================================================
+---
+
+# 1. Stop unattended-upgrades to prevent apt lock conflicts
+- name: Stop unattended-upgrades service
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+# 2. Install Docker
+- name: Install docker.io
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+    update_cache: true
+
+# 3. Enable and start Docker service
+- name: Enable and start Docker service
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+# 4. Add vagrant user to docker group
+- name: Add vagrant user to docker group
+  ansible.builtin.user:
+    name: vagrant
+    groups: docker
+    append: true
+
+# 5. Install Python docker SDK (only on services VM — needed for Ansible docker modules)
+- name: Install Python docker SDK
+  ansible.builtin.pip:
+    name: docker
+    state: present
+    executable: pip3
+  when: "'services' in group_names"
+
+# 6. Install community.docker Ansible collection (only on services VM)
+- name: Install community.docker Ansible collection
+  ansible.builtin.command: ansible-galaxy collection install community.docker
+  become: false
+  changed_when: false
+  when: "'services' in group_names"
+
+# 7. Configure Docker insecure registry for Nexus
+- name: Configure Docker insecure registry
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "insecure-registries": ["192.168.56.20:8082"]
+      }
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart docker
+
+# 8. Flush handlers to apply daemon.json now
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+# 9. Configure containerd for insecure registry (only on K8s nodes)
+- name: Configure containerd for insecure registry
+  ansible.builtin.blockinfile:
+    path: /etc/containerd/config.toml
+    block: |
+      [plugins."io.containerd.grpc.v1.cri".registry.mirrors."192.168.56.20:8082"]
+        endpoint = ["http://192.168.56.20:8082"]
+    marker: "# {mark} INSECURE REGISTRY CONFIG"
+    insertafter: EOF
+  when: "'k8s_cluster' in group_names"
+  notify: restart containerd
+
+# 10. Flush handlers for containerd restart
+- name: Flush containerd handlers
+  ansible.builtin.meta: flush_handlers
+  when: "'k8s_cluster' in group_names"

@@ -1,0 +1,80 @@
+# =============================================================================
+# Role: ingress — Deploy ingress-nginx and app ingress routing
+# =============================================================================
+# Runs on: masters (become: false, as vagrant user with kubectl)
+# =============================================================================
+---
+
+- name: Check if ingress-nginx namespace exists
+  ansible.builtin.command: >
+    kubectl get ns ingress-nginx
+    --kubeconfig=/home/vagrant/.kube/config
+  register: ingress_ns_check
+  changed_when: false
+  failed_when: false
+
+- name: Install ingress-nginx (bare metal)
+  ansible.builtin.command: >
+    kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/baremetal/deploy.yaml
+    --kubeconfig=/home/vagrant/.kube/config
+  when: ingress_ns_check.rc != 0
+
+- name: Wait for ingress-nginx service
+  ansible.builtin.command: >
+    kubectl get svc ingress-nginx-controller -n ingress-nginx
+    --kubeconfig=/home/vagrant/.kube/config
+  register: ingress_svc_check
+  retries: 30
+  delay: 5
+  until: ingress_svc_check.rc == 0
+  changed_when: false
+
+- name: Wait for ingress-nginx controller to be ready
+  ansible.builtin.command: >
+    kubectl rollout status deployment/ingress-nginx-controller
+    -n ingress-nginx
+    --timeout=300s
+    --kubeconfig=/home/vagrant/.kube/config
+  changed_when: false
+
+- name: Get ingress-nginx NodePort
+  ansible.builtin.command: >
+    kubectl get svc ingress-nginx-controller -n ingress-nginx
+    -o jsonpath='{.spec.ports[0].nodePort}'
+    --kubeconfig=/home/vagrant/.kube/config
+  register: ingress_nodeport
+  changed_when: false
+
+- name: Patch ingress-nginx NodePort to 30090
+  ansible.builtin.command: >
+    kubectl patch svc ingress-nginx-controller -n ingress-nginx
+    --type='json'
+    -p='[{"op":"replace","path":"/spec/ports/0/nodePort","value":30090}]'
+    --kubeconfig=/home/vagrant/.kube/config
+  when: ingress_nodeport.stdout | trim != "30090"
+
+- name: Create ingress manifests directory
+  ansible.builtin.file:
+    path: /tmp/k8s-ingress
+    state: directory
+    mode: "0755"
+
+- name: Copy ingress manifest files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /tmp/k8s-ingress/
+  loop:
+    - backend-alias.yaml
+    - app-ingress.yaml
+
+- name: Apply backend alias service
+  ansible.builtin.command: >
+    kubectl apply -f /tmp/k8s-ingress/backend-alias.yaml
+    --kubeconfig=/home/vagrant/.kube/config
+  changed_when: true
+
+- name: Apply app ingress
+  ansible.builtin.command: >
+    kubectl apply -f /tmp/k8s-ingress/app-ingress.yaml
+    --kubeconfig=/home/vagrant/.kube/config
+  changed_when: true

@@ -1,24 +1,18 @@
 # =============================================================================
-# Ansible Playbook — Kubernetes Cluster Provisioning
-# =============================================================================
-# Execution order:
-#   1. common      → System prerequisites (all k8s nodes)
-#   2. containerd   → Container runtime (all k8s nodes)
-#   3. kubernetes   → kubeadm/kubelet/kubectl (all k8s nodes)
-#   4. master       → Control plane init (masters only)
-#   5. cni          → Flannel network plugin (masters only)
-#   6. workers      → Join workers to cluster (workers only)
-#   7. validation   → Verify cluster health (masters only)
+# Ansible Playbook — Full Kubernetes DevOps Platform
 # =============================================================================
 ---
 
 # =============================================================================
-# Play 1 — Prepare all Kubernetes nodes (common + containerd + kubernetes)
+# Play 1 — Prepare all Kubernetes nodes
 # =============================================================================
 - name: Prepare Kubernetes nodes
   hosts: k8s_cluster
   become: true
   gather_facts: true
+  tags:
+    - base
+    - k8s
   roles:
     - role: common
     - role: nfs_client
@@ -26,35 +20,112 @@
     - role: kubernetes
 
 # =============================================================================
-# Play 2 — Initialize the control plane and install CNI
+# Play 2 — Initialize Kubernetes control plane
 # =============================================================================
 - name: Initialize Kubernetes control plane
   hosts: masters
   become: true
   gather_facts: false
+  tags:
+    - base
+    - k8s
+    - master
   roles:
     - role: master
     - role: cni
 
 # =============================================================================
-# Play 3 — Join worker nodes to the cluster
+# Play 3 — Join worker nodes
 # =============================================================================
 - name: Join worker nodes to the cluster
   hosts: workers
   become: true
   gather_facts: false
+  tags:
+    - base
+    - k8s
+    - workers
   roles:
     - role: workers
 
 # =============================================================================
-# Play 4 — Validate the cluster
+# Play 4 — Prepare services VM
+# =============================================================================
+- name: Prepare services node
+  hosts: services
+  become: true
+  gather_facts: true
+  tags:
+    - services
+  roles:
+    - role: common
+    - role: nfs_server
+    - role: docker
+    - role: gitea
+    - role: nexus
+
+# =============================================================================
+# Play 5 — Configure Docker on Kubernetes workers for local registry
+# =============================================================================
+- name: Configure Docker on workers for CI/CD support
+  hosts: workers
+  become: true
+  gather_facts: false
+  tags:
+    - docker-workers
+  roles:
+    - role: docker
+
+# =============================================================================
+# Play 6 — Deploy Kubernetes applications
+# =============================================================================
+- name: Deploy Kubernetes applications
+  hosts: masters
+  become: false
+  gather_facts: false
+  tags:
+    - apps
+  roles:
+    - role: mysql
+    - role: backend
+    - role: frontend
+    - role: jenkins
+
+# =============================================================================
+# Play 7 — Deploy ingress
+# =============================================================================
+- name: Deploy ingress-nginx and app ingress
+  hosts: masters
+  become: false
+  gather_facts: false
+  tags:
+    - ingress
+  roles:
+    - role: ingress
+
+# =============================================================================
+# Play 8 — Deploy Vault dev server
+# =============================================================================
+- name: Deploy Vault dev server
+  hosts: services
+  become: true
+  gather_facts: false
+  tags:
+    - vault
+  roles:
+    - role: vault
+
+# =============================================================================
+# Play 9 — Validate cluster
 # =============================================================================
 - name: Validate Kubernetes cluster
   hosts: masters
   become: false
   gather_facts: false
+  tags:
+    - validate
+    - always
   tasks:
-    # Wait for all nodes to become Ready
     - name: Wait for all nodes to be Ready
       ansible.builtin.shell: |
         kubectl get nodes --no-headers | grep -v " Ready " | wc -l
@@ -64,7 +135,6 @@
       delay: 10
       changed_when: false
 
-    # Display node status
     - name: Get node status
       ansible.builtin.command: kubectl get nodes -o wide
       register: nodes_output
@@ -74,7 +144,6 @@
       ansible.builtin.debug:
         msg: "{{ nodes_output.stdout_lines }}"
 
-    # Display pod status
     - name: Get pod status across all namespaces
       ansible.builtin.command: kubectl get pods -A -o wide
       register: pods_output
@@ -83,14 +152,3 @@
     - name: Display pod status
       ansible.builtin.debug:
         msg: "{{ pods_output.stdout_lines }}"
-
-# =============================================================================
-# Play 5 — Prepare services node (common packages only)
-# =============================================================================
-- name: Prepare services node
-  hosts: services
-  become: true
-  gather_facts: true
-  roles:
-    - role: common
-    - role: nfs_server

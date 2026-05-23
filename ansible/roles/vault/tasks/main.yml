@@ -1,0 +1,57 @@
+# =============================================================================
+# Role: vault — Deploy Vault dev server on services VM
+# =============================================================================
+---
+
+- name: Create Vault config directory
+  ansible.builtin.file:
+    path: /srv/vault/config
+    state: directory
+    mode: "0755"
+
+- name: Copy Vault config
+  ansible.builtin.copy:
+    src: vault.hcl
+    dest: /srv/vault/config/vault.hcl
+    mode: "0644"
+
+- name: Start Vault container (dev mode)
+  community.docker.docker_container:
+    name: vault
+    image: hashicorp/vault:1.17
+    state: started
+    restart_policy: unless-stopped
+    recreate: true
+    ports:
+      - "8201:8200"
+    env:
+      VAULT_DEV_ROOT_TOKEN_ID: "root"
+    command: vault server -dev -dev-listen-address=0.0.0.0:8200
+
+- name: Wait for Vault health
+  ansible.builtin.uri:
+    url: http://localhost:8201/v1/sys/health
+    status_code: 200
+    method: GET
+  register: vault_health
+  until: vault_health.status == 200
+  retries: 20
+  delay: 5
+
+- name: Write MySQL secret
+  ansible.builtin.command: >
+    docker exec vault sh -c "export VAULT_ADDR=http://127.0.0.1:8200; export VAULT_TOKEN=root; vault kv put secret/mysql DB_USER=appuser DB_PASSWORD=apppass123 DB_NAME=appdb DB_HOST=mysql-svc.database.svc.cluster.local DB_PORT=3306"
+  changed_when: true
+  no_log: true
+
+- name: Write Nexus secret
+  ansible.builtin.command: >
+    docker exec vault sh -c "export VAULT_ADDR=http://127.0.0.1:8200; export VAULT_TOKEN=root; vault kv put secret/nexus username=admin password=admin123 registry=192.168.56.20:8082"
+  changed_when: true
+  no_log: true
+
+- name: Write Jenkins secret
+  ansible.builtin.command: >
+    docker exec vault sh -c "export VAULT_ADDR=http://127.0.0.1:8200; export VAULT_TOKEN=root; vault kv put secret/jenkins note='Jenkins can retrieve secrets from Vault in the next improvement'"
+  changed_when: true
+  no_log: true

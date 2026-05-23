@@ -1,0 +1,6 @@
+cd /home/vagrant/app/backend
+sed -i "s/service: 'backend-demo-2'/service: 'backend-demo-3'/" server.js
+git diff
+git add server.js
+git commit -m "demo backend pipeline"
+git push origin main

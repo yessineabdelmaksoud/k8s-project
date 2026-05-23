@@ -10,6 +10,11 @@
 # ═══════════════════════════════════════════════
 # STEP 1 — Start VMs
 # ═══════════════════════════════════════════════
+# If `vagrant up` fails with `VERR_ALREADY_EXISTS` for `k8s-master`, clean the stale
+# VirtualBox registration/folder first, then retry:
+#   "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" unregistervm k8s-master --delete
+#   Remove-Item -Recurse -Force "$env:USERPROFILE\VirtualBox VMs\k8s-master"
+# Then run `vagrant up --no-provision` again.
 vagrant up --no-provision
 
 # ═══════════════════════════════════════════════
@@ -30,6 +35,8 @@ vagrant ssh services -c "mkdir -p /home/vagrant/ansible/roles/mysql/{tasks,files
 vagrant ssh services -c "mkdir -p /home/vagrant/ansible/roles/backend/{tasks,files}"
 vagrant ssh services -c "mkdir -p /home/vagrant/ansible/roles/frontend/{tasks,files}"
 vagrant ssh services -c "mkdir -p /home/vagrant/ansible/roles/jenkins/{tasks,files}"
+vagrant ssh services -c "mkdir -p /home/vagrant/ansible/roles/ingress/{tasks,files}"
+vagrant ssh services -c "mkdir -p /home/vagrant/ansible/roles/vault/{tasks,files}"
 
 # Upload playbook + group_vars
 vagrant upload ansible/playbook.yml /home/vagrant/ansible/playbook.yml services
@@ -79,6 +86,15 @@ vagrant upload ansible/roles/jenkins/files/pvc.yaml /home/vagrant/ansible/roles/
 vagrant upload ansible/roles/jenkins/files/deployment.yaml /home/vagrant/ansible/roles/jenkins/files/deployment.yaml services
 vagrant upload ansible/roles/jenkins/files/service.yaml /home/vagrant/ansible/roles/jenkins/files/service.yaml services
 
+# Upload ingress role
+vagrant upload ansible/roles/ingress/tasks/main.yml /home/vagrant/ansible/roles/ingress/tasks/main.yml services
+vagrant upload ansible/roles/ingress/files/backend-alias.yaml /home/vagrant/ansible/roles/ingress/files/backend-alias.yaml services
+vagrant upload ansible/roles/ingress/files/app-ingress.yaml /home/vagrant/ansible/roles/ingress/files/app-ingress.yaml services
+
+# Upload vault role
+vagrant upload ansible/roles/vault/tasks/main.yml /home/vagrant/ansible/roles/vault/tasks/main.yml services
+vagrant upload ansible/roles/vault/files/vault.hcl /home/vagrant/ansible/roles/vault/files/vault.hcl services
+
 # ═══════════════════════════════════════════════
 # STEP 4 — Run Ansible: Services VM (Docker + Gitea + Nexus) — ~10 min
 # ═══════════════════════════════════════════════
@@ -99,6 +115,11 @@ vagrant ssh services -c "chmod +x /home/vagrant/nexus-setup.sh && bash /home/vag
 
 # Verify Docker registry
 vagrant ssh services -c "curl -s -u admin:admin123 http://localhost:8081/v2/_catalog"
+
+# ═══════════════════════════════════════════════
+# STEP 6B — Vault (optional, dev mode)
+# ═══════════════════════════════════════════════
+vagrant ssh services -c "cd /home/vagrant/ansible && ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i inventory.ini playbook.yml --tags vault -v"
 
 # ═══════════════════════════════════════════════
 # STEP 7 — Run Ansible: Docker on workers — ~5 min
@@ -158,14 +179,84 @@ vagrant ssh k8s-master -c "kubectl exec -n jenkins deployment/jenkins -- docker 
 # 4. Upload your local code to the services VM:
 vagrant upload app /home/vagrant/app services
 
+
+
+
 # 5. Push the backend code to Gitea:
 vagrant ssh services -c "cd /home/vagrant/app/backend && git init && git checkout -b main && git config user.email 'vagrant@local' && git config user.name 'vagrant' && git add . && git commit -m 'init' && git remote add origin http://vagrant:vagrant123@localhost:3000/vagrant/backend.git && git push -u origin main"
 
 # 6. Push the frontend code to Gitea:
 vagrant ssh services -c "cd /home/vagrant/app/frontend && git init && git checkout -b main && git config user.email 'vagrant@local' && git config user.name 'vagrant' && git add . && git commit -m 'init' && git remote add origin http://vagrant:vagrant123@localhost:3000/vagrant/frontend.git && git push -u origin main"
 
+vagrant ssh services -c "cd /home/vagrant/app/frontend && git push -u origin main --force"
+vagrant ssh services -c "cd /home/vagrant/app/backend && git push -u origin main --force"
+
 # ═══════════════════════════════════════════════
-# STEP 12 — URLs d'accès
+# STEP 12 — Ingress (optional: single entrypoint)
+# ═══════════════════════════════════════════════
+
+# Option A: Run the Ansible ingress role (recommended)
+vagrant ssh services -c "cd /home/vagrant/ansible && ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i inventory.ini playbook.yml --tags ingress -v"
+
+# Option B: Manual kubectl steps
+
+# Install ingress-nginx for bare metal
+vagrant ssh k8s-master -c "kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/baremetal/deploy.yaml"
+
+# Force a fixed NodePort for HTTP
+vagrant ssh k8s-master -c "kubectl patch svc ingress-nginx-controller -n ingress-nginx --type='json' -p='[{\"op\":\"replace\",\"path\":\"/spec/ports/0/nodePort\",\"value\":30090}]'"
+
+# Create an ExternalName service in frontend namespace that points to backend
+vagrant ssh k8s-master -c "cat > /tmp/backend-alias.yaml <<'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+	name: backend
+	namespace: frontend
+spec:
+	type: ExternalName
+	externalName: backend.backend.svc.cluster.local
+	ports:
+	- port: 8080
+		targetPort: 8080
+EOF
+kubectl apply -f /tmp/backend-alias.yaml"
+
+# Create ingress that routes /api to backend and / to frontend
+vagrant ssh k8s-master -c "cat > /tmp/app-ingress.yaml <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+	name: app-ingress
+	namespace: frontend
+spec:
+	ingressClassName: nginx
+	rules:
+	- host: k8s-app.local
+		http:
+			paths:
+			- path: /api
+				pathType: Prefix
+				backend:
+					service:
+						name: backend
+						port:
+							number: 8080
+			- path: /
+				pathType: Prefix
+				backend:
+					service:
+						name: frontend
+						port:
+							number: 80
+EOF
+kubectl apply -f /tmp/app-ingress.yaml"
+
+# Test ingress routing from any VM
+vagrant ssh services -c "curl -H 'Host: k8s-app.local' http://192.168.56.11:30090/api/health"
+
+# ═══════════════════════════════════════════════
+# STEP 13 — URLs d'accès
 # ═══════════════════════════════════════════════
 # Gitea    : http://192.168.56.20:3000
 # Nexus    : http://192.168.56.20:8081   (admin / admin123)
@@ -185,3 +276,55 @@ vagrant ssh services -c "cd /home/vagrant/app/frontend && git init && git checko
 #   ansible-playbook playbook.yml --tags services
 # Everything:
 #   ansible-playbook playbook.yml
+
+
+
+vagrant ssh k8s-master -c "kubectl get deployment jenkins -n jenkins -o yaml"
+
+
+vagrant ssh k8s-master -c "kubectl exec -n jenkins deployment/jenkins -- docker info"
+
+
+
+Étape 1 : Ajouter les identifiants Nexus
+Le pipeline a besoin de s'authentifier auprès de votre registre Docker Nexus, et il cherchera un identifiant nommé exactement nexus-credentials.
+
+Dans le menu de gauche, cliquez sur Gérer Jenkins (Manage Jenkins).
+Sous Sécurité, cliquez sur Credentials (Identifiants).
+Cliquez sur la flèche à côté de (global) puis sur Add Credentials (Ajouter des identifiants).
+Remplissez le formulaire exactement comme suit :
+Kind : Username with password
+Scope : Global
+Username : admin
+Password : admin123
+ID : nexus-credentials (⚠️ très important, ne vous trompez pas sur l'ID)
+Description : Nexus Docker Registry
+Cliquez sur Create (Créer).
+
+
+
+Étape 2 : Créer le Job pour le Backend
+Retournez sur le tableau de bord Jenkins et cliquez sur Nouveau Item ou Créer un job.
+Entrez le nom : backend-pipeline
+Sélectionnez Pipeline et cliquez sur OK.
+Descendez tout en bas vers la section Pipeline :
+Definition : Choisissez Pipeline script from SCM
+SCM : Git
+Repository URL : http://192.168.56.20:3000/vagrant/backend.git
+Branch Specifier : */main
+Script Path : Jenkinsfile
+Cliquez sur Sauvegarder (Save).
+Lancez-le en cliquant sur Lancer la construction (Build Now) dans le menu de gauche.
+Attendez que le pipeline passe au vert. Cela va construire l'image Node.js, la pousser sur Nexus, et déployer le backend sur le cluster Kubernetes.
+
+
+vagrant ssh services -c "cd /home/vagrant/app/backend && sed -i '/NAMESPACE    = \"backend\"/a \        KUBECONFIG   = \"/var/jenkins_home/.kube/config\"' Jenkinsfile && git add Jenkinsfile && git commit -m 'fix kubeconfig' && git push origin main"
+
+
+Pour vérifier que tout est vraiment bon, fais dans cet ordre:
+
+Relancer uniquement Jenkins via Ansible: vagrant ssh services -c "cd /home/vagrant/ansible && ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i inventory.ini playbook.yml --tags jenkins --become -v"
+Vérifier depuis le pod Jenkins que l’accès Kubernetes fonctionne: vagrant ssh k8s-master -c "kubectl exec -n jenkins deployment/jenkins -- kubectl get nodes"
+Vérifier le Docker runtime dans Jenkins: vagrant ssh k8s-master -c "kubectl exec -n jenkins deployment/jenkins -- docker info --format '{{.ServerVersion}}'"
+Lancer un build backend et un build frontend dans Jenkins, puis contrôler que les stages Build, Push, Deploy et Verify passent au vert.
+Si un pipeline échoue encore, ouvre la console du job et envoie-moi la première erreur exacte; je te dirai quoi corriger sans tâtonner.

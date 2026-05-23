@@ -6,6 +6,7 @@ pipeline {
         GITEA_URL    = "http://192.168.56.20:3000"
         IMAGE_NAME   = "backend"
         NAMESPACE    = "backend"
+        KUBECONFIG   = "/var/jenkins_home/.kube/config"
     }
 
     stages {
@@ -18,7 +19,11 @@ pipeline {
 
         stage('Build Image') {
             steps {
-                sh "docker build -t ${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} ."
+                script {
+                    retry(3) {
+                        sh "docker build -t ${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} ."
+                    }
+                }
             }
         }
 
@@ -45,7 +50,11 @@ pipeline {
 
         stage('Verify') {
             steps {
-                sh "kubectl rollout status deployment/${IMAGE_NAME} -n ${NAMESPACE} --timeout=120s"
+                script {
+                    retry(2) {
+                        sh "kubectl rollout status deployment/${IMAGE_NAME} -n ${NAMESPACE} --timeout=300s"
+                    }
+                }
             }
         }
     }

@@ -1,0 +1,6 @@
+---
+# Placeholder Vault file for repo 3.
+# Replace these values with real secrets and encrypt the file with ansible-vault.
+
+vault_username: "CHANGE_ME_USERNAME"
+vault_password: "CHANGE_ME_PASSWORD"

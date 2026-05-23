@@ -6,6 +6,7 @@ pipeline {
         GITEA_URL    = "http://192.168.56.20:3000"
         IMAGE_NAME   = "frontend"
         NAMESPACE    = "frontend"
+        KUBECONFIG   = "/var/jenkins_home/.kube/config"
     }
 
     stages {
@@ -39,13 +40,23 @@ pipeline {
 
         stage('Deploy') {
             steps {
-                sh "kubectl set image deployment/${IMAGE_NAME} ${IMAGE_NAME}=${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} -n ${NAMESPACE}"
+                script {
+                    // kubectl can occasionally lose the HTTP/2 connection while the API server still applies the update.
+                    retry(3) {
+                        sh "kubectl set image deployment/${IMAGE_NAME} ${IMAGE_NAME}=${NEXUS_URL}/${IMAGE_NAME}:${BUILD_NUMBER} -n ${NAMESPACE} --request-timeout=120s"
+                    }
+                }
             }
         }
 
         stage('Verify') {
             steps {
-                sh "kubectl rollout status deployment/${IMAGE_NAME} -n ${NAMESPACE} --timeout=120s"
+                script {
+                    // Rollouts can be delayed by transient node or endpoint updates.
+                    retry(2) {
+                        sh "kubectl rollout status deployment/${IMAGE_NAME} -n ${NAMESPACE} --timeout=300s"
+                    }
+                }
             }
         }
     }

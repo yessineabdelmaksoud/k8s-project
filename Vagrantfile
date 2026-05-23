@@ -12,8 +12,8 @@
 # ---------- VM definitions ---------------------------------------------------
 NODES = [
   { name: "k8s-master",  ip: "192.168.56.10", cpus: 2, memory: 4096 },
-  { name: "k8s-worker1", ip: "192.168.56.11", cpus: 2, memory: 2048 },
-  { name: "k8s-worker2", ip: "192.168.56.12", cpus: 2, memory: 2048 },
+  { name: "k8s-worker1", ip: "192.168.56.11", cpus: 2, memory: 3072 },
+  { name: "k8s-worker2", ip: "192.168.56.12", cpus: 2, memory: 3072 },
   { name: "services",    ip: "192.168.56.20", cpus: 2, memory: 4096 },
 ]
 

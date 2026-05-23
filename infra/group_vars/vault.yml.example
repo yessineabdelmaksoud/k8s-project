@@ -1,0 +1,5 @@
+---
+# Copy this file to group_vars/vault.yml and encrypt it with ansible-vault.
+
+vault_username: "CHANGE_ME_USERNAME"
+vault_password: "CHANGE_ME_PASSWORD"

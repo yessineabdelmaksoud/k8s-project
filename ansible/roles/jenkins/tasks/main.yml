@@ -53,3 +53,40 @@
 - name: Wait for Jenkins Deployment to be ready
   ansible.builtin.command: kubectl rollout status deployment/jenkins -n jenkins --timeout=300s
   changed_when: false
+
+# 4. Configure kubeconfig for Jenkins pipelines (tokenFile avoids token expiry issues)
+- name: Get Jenkins pod name
+  ansible.builtin.command: kubectl get pods -n jenkins -l app=jenkins -o jsonpath='{.items[0].metadata.name}'
+  register: jenkins_pod_name
+  changed_when: false
+
+- name: Ensure Jenkins kubeconfig directory exists
+  ansible.builtin.command: kubectl exec -n jenkins {{ jenkins_pod_name.stdout }} -- mkdir -p /var/jenkins_home/.kube
+  changed_when: true
+
+- name: Create Jenkins kubeconfig using in-cluster ServiceAccount files
+  ansible.builtin.shell: |
+    kubectl exec -i -n jenkins {{ jenkins_pod_name.stdout }} -- sh -c 'cat > /var/jenkins_home/.kube/config' <<'EOF'
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: kubernetes
+        cluster:
+          server: https://kubernetes.default.svc:443
+          certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    contexts:
+      - name: jenkins
+        context:
+          cluster: kubernetes
+          user: jenkins
+    current-context: jenkins
+    users:
+      - name: jenkins
+        user:
+          tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    EOF
+  changed_when: true
+
+- name: Secure Jenkins kubeconfig permissions
+  ansible.builtin.command: kubectl exec -n jenkins {{ jenkins_pod_name.stdout }} -- chmod 600 /var/jenkins_home/.kube/config
+  changed_when: true
